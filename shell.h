@@ -17,5 +17,9 @@ int _putchar(char c);
 void _myfork(char **argv, char **av, char **environ);
 void print_env(char **environ);
 void free_argv(char **argv);
+void _mygetline(void);
+void sigintHandler(int sig);
+char **mystrtok(const char *delim, char *line);
+char *_which(char **env, char *command);
 
 #endif /* _SHELL_H_*/
