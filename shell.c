@@ -1,278 +1,134 @@
 #include "shell.h"
 
+void sig_handler(int sig);
+int execute(char **args, char **front);
+
 /**
- * sigintHandler - Handles the SIGINT signal (Ctrl+C)
- * @sig: The signal number (not used in the function)
- *
- * Frees the dynamically allocated memory for 'lineptr' and
- * terminates the program.
+ * sig_handler - Prints a new prompt upon a signal.
+ * @sig: The signal.
  */
-void sigintHandler(int sig)
+void sig_handler(int sig)
 {
-	(void) sig;
-	free(lineptr),
-	lineptr = NULL;
-	_putchar('\n');
-	exit(0);
+	char *new_prompt = "\n#cisfun$ ";
+
+	(void)sig;
+	signal(SIGINT, sig_handler);
+	write(STDIN_FILENO, new_prompt, 10);
 }
 
 /**
- * _mygetline - Reads a line of input from stdin
+ * execute - Executes a command in a child process.
+ * @args: An array of arguments.
+ * @front: A double pointer to the beginning of args.
  *
- * Reads a line of input from stdin and stores it in the 'lineptr' variable
- * Dynamically allocates memory for 'lineptr' to accommodate the input line
+ * Return: If an error occurs - a corresponding error code.
+ *         O/w - The exit value of the last executed command.
  */
-void _mygetline(void)
-{
-	size_t n = 0;
-	ssize_t nread;
-
-	nread = getline(&lineptr, &n, stdin);
-	if (nread == -1)
-	{
-		free(lineptr);
-		lineptr = NULL;
-		exit(0);
-	}
-
-	lineptr[nread - 1] = '\0';
-}
-
-/**
- * mystrtok - tokenizes a line
- * @delim: delimiter to use
- * @line: line to tokenize
- *
- * Return: array of token, else NULL
- */
-char **mystrtok(const char *delim, char *line)
-{
-	char *token = NULL;
-	char **tokens = malloc(sizeof(char *) * 1024);
-	int i = 0;
-
-	if (!tokens)
-		return (NULL);
-
-	token = strtok(line, delim);
-	if (token == NULL)
-	{
-		free(tokens), token = NULL;
-		free(line), line = NULL;
-		return (NULL);
-	}
-
-	while (token)
-	{
-		tokens[i] = strdup(token);
-		token = strtok(NULL, delim);
-		i++;
-	}
-
-	tokens[i] = NULL;
-	return (tokens);
-}
-
-/**
- * _myfork - Function to create a child process and execute a specified program.
- *
- * @argv: Array of strings containing the arguments to be passed to the
- * program.
- * @av: Array of strings containing the program name and arguments.
- * @environ: Environment variables
- **/
-void _myfork(char **argv, char **av, char **environ)
+int execute(char **args, char **front)
 {
 	pid_t child_pid;
-	int status, exit_status;
+	int status, flag = 0, ret = 0;
+	char *command = args[0];
 
-	child_pid = fork();
-	if (child_pid == -1)
-		return;
-	else if (child_pid == 0)
+	if (command[0] != '/' && command[0] != '.')
 	{
-		if (execve(argv[0], argv, environ) == -1)
-			perror(av[0]);
+		flag = 1;
+		command = get_location(command);
+	}
+
+	if (!command || (access(command, F_OK) == -1))
+	{
+		if (errno == EACCES)
+			ret = (create_error(args, 126));
+		else
+			ret = (create_error(args, 127));
 	}
 	else
 	{
-		wait(&status);
-		if (WIFEXITED(status))
+		child_pid = fork();
+		if (child_pid == -1)
 		{
-			exit_status = WEXITSTATUS(status);
-			if (exit_status != 0)
-			{
-				EXITSTATUS = 2;
-			}
+			if (flag)
+				free(command);
+			perror("Error child:");
+			return (1);
+		}
+		if (child_pid == 0)
+		{
+			execve(command, args, environ);
+			if (errno == EACCES)
+				ret = (create_error(args, 126));
+			free_env();
+			free_args(args, front);
+			free_alias_list(aliases);
+			_exit(ret);
+		}
+		else
+		{
+			wait(&status);
+			ret = WEXITSTATUS(status);
 		}
 	}
+	if (flag)
+		free(command);
+	return (ret);
 }
 
 /**
- * _which - Find the full path of a command in the PATH environment variable.
- * @env: An array of environment variables.
- * @command: The command to search for.
+ * main - Runs a simple UNIX command interpreter.
+ * @argc: The number of arguments supplied to the program.
+ * @argv: An array of pointers to the arguments.
  *
- * Return: The full path of the command if found, or NULL if not found.
+ * Return: The return value of the last executed command.
  */
-char *_which(char **env, char *command)
+int main(int argc, char *argv[])
 {
-	unsigned int i = 0;
-	char **paths = NULL, *buffer = NULL;
-	char *paths_copy;
-	size_t length = 0;
-	struct stat statbuf;
+	int ret = 0, retn;
+	int *exe_ret = &retn;
+	char *prompt = "#cisfun$ ", *new_line = "\n";
 
-	while (env[i] != NULL)
+	name = argv[0];
+	hist = 1;
+	aliases = NULL;
+	signal(SIGINT, sig_handler);
+
+	*exe_ret = 0;
+	environ = _copyenv();
+	if (!environ)
+		exit(-100);
+
+	if (argc != 1)
 	{
-		if (strncmp(env[i], "PATH", 4) == 0)
-			break;
-		i++;
+		ret = proc_file_commands(argv[1], exe_ret);
+		free_env();
+		free_alias_list(aliases);
+		return (*exe_ret);
 	}
 
-	paths_copy = strdup(env[i]);
-	paths = mystrtok(":=", paths_copy);
-	free(paths_copy);
-
-	if (paths)
+	if (!isatty(STDIN_FILENO))
 	{
-		for (i = 0; paths[i]; i++)
-		{
-			length = strlen(paths[i]) + strlen(command) + 2;
-			buffer = malloc(length);
-			if (buffer)
-			{
-				strcpy(buffer, paths[i]);
-				strcat(buffer, "/");
-				strcat(buffer, command);
-
-				if (stat(buffer, &statbuf) == 0)
-				{
-					while (paths[i])
-						free(paths[i++]);
-					free(paths);
-					return (buffer);
-				}
-				free(buffer);
-				free(paths[i]);
-			}
-		}
-		free(paths);
+		while (ret != END_OF_FILE && ret != EXIT)
+			ret = handle_args(exe_ret);
+		free_env();
+		free_alias_list(aliases);
+		return (*exe_ret);
 	}
-	return (NULL);
-}
 
-/**
- * print_env - Print the current environment variables
- * @environ: Environment variables
- **/
-void print_env(char **environ)
-{
-	int i = 0, j = 0;
-	char *var = NULL;
-
-	while (environ[i] != NULL)
-	{
-		var = environ[i];
-		j = 0;
-
-		while (var[j] != '\0')
-		{
-			_putchar(var[j]);
-			j++;
-		}
-		_putchar('\n');
-		i++;
-	}
-}
-
-/**
- * free_argv - frees an array
- *
- * @argv: array
- *
- */
-void free_argv(char **argv)
-{
-	int i;
-
-	for (i = 0; argv[i]; i++)
-	{
-		free(argv[i]), argv[i] = NULL;
-	}
-	free(argv), argv = NULL;
-	free(lineptr);
-}
-
-/**
- * main - Entry point of the program
- *
- * @ac: argument count (unused)
- * @av: argument vector
- * @environ: environment variables
- *
- * Return: 0 on successful completion
- */
-int main(int ac, char **av, char **environ)
-{
-	char *prompt = "simple_shell$ ", *full_path = NULL;
-	int i, EXITVALUE;
-	char **argv = NULL;
-	bool interactive = isatty(fileno(stdin));
-	struct stat statbuf;
-
-	(void) ac;
-	/* The SIGINT signal handler to handle Ctrl+C interrupts */
-	signal(SIGINT, sigintHandler);
 	while (1)
 	{
-		if (interactive)
+		write(STDOUT_FILENO, prompt, 10);
+		ret = handle_args(exe_ret);
+		if (ret == END_OF_FILE || ret == EXIT)
 		{
-			i = 0;
-			while (prompt[i])
-				_putchar(prompt[i++]);
-		}
-		_mygetline();
-		argv = mystrtok(" ", lineptr);
-		if (argv != NULL)
-		{
-			if (strcmp(argv[0], "exit") == 0)
-			{
-				if (argv[1] != NULL)
-				{
-					if (atoi(argv[1]) > 0)
-					{
-						EXITVALUE = atoi(argv[1]), free_argv(argv), exit(EXITVALUE);
-					}
-					else
-					{
-						fprintf(stderr, "%s: 1: exit: Illegal number: %s\n", av[0], argv[1]);
-						free_argv(argv), exit(2);
-					}
-				}
-				free_argv(argv), exit(EXITSTATUS);
-			}
-			else if (strcmp(argv[0], "env") == 0)
-				print_env(environ);
-			else
-			{
-				if (stat(argv[0], &statbuf) == 0)
-    					_myfork(argv, av, environ);
-				else
-				{
-    					full_path = _which(environ, argv[0]);
-    					if (full_path != NULL)
-    					{
-        					free(argv[0]);
-        					argv[0] = full_path;
-        					_myfork(argv, av, environ);
-    					}
-    					else
-        					perror(av[0]);
-				}
-			}
-			free_argv(argv);
+			if (ret == END_OF_FILE)
+				write(STDOUT_FILENO, new_line, 10);
+			free_env();
+			free_alias_list(aliases);
+			exit(*exe_ret);
 		}
 	}
-	return (0);
+
+	free_env();
+	free_alias_list(aliases);
+	return (*exe_ret);
 }
